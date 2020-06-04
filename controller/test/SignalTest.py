@@ -1,10 +1,12 @@
 import importlib
+import time
 import unittest
 from time import sleep
 from unittest.mock import MagicMock, Mock, patch
 
 from controller.framework.CBT import CBT
 from controller.framework.CFx import CFX
+from controller.framework.CFxHandle import CFxHandle
 
 from controller.modules.Signal import XmppTransport, JidCache
 
@@ -144,10 +146,16 @@ class SignalTest(unittest.TestCase):
         Test to check the send message method of transport instance of the signal class.
         """
         sig_dict, signal = self.setup_vars_mocks()
+
         transport = XmppTransport.factory("1", sig_dict["Signal"]["Overlays"]["A0FB389"], signal,
                                           signal._presence_publisher,
                                           None, None)
-        transport.send_msg(signal._presence_publisher, "invk", None)
+        msg = transport.Message()
+        msg["to"] = "1"
+        print(msg["to"])
+        msg["from"] = "self.boundjid.full"
+        msg["type"] = "chat"
+        transport.send_msg("1", str("qw"), None)
         print("Passed : testtransport_send_message")
 
     def testjid_cache_add_lookup_entry(self):
@@ -252,7 +260,7 @@ class SignalTest(unittest.TestCase):
         transport.send_presence.assert_called_once()
         print("Passed : testtransmit_remote_act_nopeer_jid")
 
-    def testprocess_cbt_request_rem_act(self):
+    def testsignal_process_cbt_request_rem_act(self):
         """
         Test to check the process cbt method with a request to initiate a remote action of the signal class.
         """
@@ -265,7 +273,7 @@ class SignalTest(unittest.TestCase):
         signal.req_handler_initiate_remote_action.assert_called_once()
         print("Passed : testprocess_cbt_request_rem_act")
 
-    def testprocess_cbt_request_rep_data(self):
+    def testsignal_process_cbt_request_rep_data(self):
         """
         Test to check the process cbt method with a request to report data of the signal class.
         """
@@ -278,7 +286,7 @@ class SignalTest(unittest.TestCase):
         signal.req_handler_query_reporting_data.assert_called_once()
         print("Passed : testprocess_cbt_request_rep_data")
 
-    def testprocess_cbt_resp_tag_present(self):
+    def testsignal_process_cbt_resp_tag_present(self):
         """
         Test to check the process cbt method with a response with the cbt tag present.
         """
@@ -291,6 +299,106 @@ class SignalTest(unittest.TestCase):
         signal.process_cbt(cbt)
         signal.resp_handler_remote_action.assert_called_once()
         print("Passed : testprocess_cbt_resp_tag_present")
+
+    def testsignal_process_cbt_resp_with_parent(self):
+        """
+        Test to check the process cbt method with a response with the parent present and no tag.
+        """
+        sig_dict, signal = self.setup_vars_mocks()
+        cbt1 = CBT()
+        cbt = CBT()
+        cbt.op_type = "Response"
+        cbt.parent = cbt1
+        resp = CBT.Response()
+        resp.data = "Data"
+        cbt.response = resp
+        cbt.response.status = "OK"
+        cbt1.child_count = 1
+        signal.free_cbt = MagicMock()
+        signal.complete_cbt = MagicMock()
+        signal.process_cbt(cbt)
+        signal.free_cbt.assert_called_once()
+        signal.complete_cbt.assert_called_once()
+        print("Passed : test_process_cbt_resp_with_parent")
+
+    def testsignal_process_cbt_resp_with_parent_more_children(self):
+        """
+        Test to check the process cbt method with a response with the parent present and no tag and more than 1 child.
+        """
+        sig_dict, signal = self.setup_vars_mocks()
+        cbt1 = CBT()
+        cbt = CBT()
+        cbt.op_type = "Response"
+        cbt.parent = cbt1
+        resp = CBT.Response()
+        resp.data = "Data"
+        cbt.response = resp
+        cbt.response.status = "OK"
+        cbt1.child_count = 2
+        signal.free_cbt = MagicMock()
+        signal.complete_cbt = MagicMock()
+        signal.process_cbt(cbt)
+        signal.free_cbt.assert_called_once()
+        signal.complete_cbt.assert_not_called()
+        print("Passed : test_process_cbt_resp_with_parent")
+
+    def testsignal_terminate(self):
+        """
+        Test to check the terminate method of signal class.
+        """
+        sig_dict, signal = self.setup_vars_mocks()
+        transport = XmppTransport.factory("1", sig_dict["Signal"]["Overlays"]["A0FB389"], signal,
+                                          signal._presence_publisher,
+                                          None, None)
+        transport.shutdown = MagicMock()
+        signal._circles = {"A0FB389": {"Transport": transport, "OutgoingRemoteActs": {}}}
+        signal.terminate()
+        transport.shutdown.assert_called_once()
+        print("Passed : test_signal_terminate")
+
+    def testsignal_scavenge_pending_cbts(self):
+        """
+        Test to check if scavenge of pending CBT works with one above the request timeout.
+        """
+        cfxObject = CFX()
+        cfx_handle = CFxHandle(cfxObject)
+        module = importlib.import_module("controller.modules.{0}"
+                                         .format("Signal"))
+        module_class = getattr(module, "Signal")
+        sig_dict = {"Signal": {"Enabled": True,
+                               "Overlays": {
+                                   "A0FB389": {
+                                       "HostAddress": "1.1.1.1",
+                                       "Port": "5222",
+                                       "Username": "raj",
+                                       "Password": "raj",
+                                       "AuthenticationMethod": "PASSWORD"
+                                   }
+                               }
+                               },
+                    "NodeId": "1234434323"
+                    }
+        signal = module_class(cfx_handle, sig_dict, "Signal")
+        cfx_handle._cm_instance = signal
+        cfx_handle._cm_config = sig_dict
+        cbt1 = CBT()
+        cbt1.tag = "1"
+        cbt1.time_submit = time.time() - 5
+        signal.request_timeout = 5
+        cbt2 = CBT()
+        cbt2.tag = "2"
+        cbt2.time_submit = time.time() - 1
+        signal.complete_cbt = MagicMock()
+        signal._cfx_handle._pending_cbts.update({"0" : cbt1})
+        signal._cfx_handle._pending_cbts.update({"1": cbt2})
+        assert len(signal._cfx_handle._pending_cbts.items()) == 2
+        signal.scavenge_pending_cbts()
+        assert len(signal._cfx_handle._pending_cbts.items()) == 1
+        items = {}
+        items.update({"1" : cbt2})
+        assert signal._cfx_handle._pending_cbts == items
+        print("Passed : testsignal_scavenge_pending_cbts")
+
 
 if __name__ == '__main__':
     unittest.main()
