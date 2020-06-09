@@ -1,14 +1,17 @@
 import importlib
 import time
 import unittest
+from queue import Queue
 from time import sleep
 from unittest.mock import MagicMock, Mock, patch
+
+from sleekxmpp import register_stanza_plugin, Message, Callback, StanzaPath, JID
 
 from controller.framework.CBT import CBT
 from controller.framework.CFx import CFX
 from controller.framework.CFxHandle import CFxHandle
 
-from controller.modules.Signal import XmppTransport, JidCache
+from controller.modules.Signal import XmppTransport, JidCache, IpopSignal
 
 
 class SignalTest(unittest.TestCase):
@@ -73,7 +76,7 @@ class SignalTest(unittest.TestCase):
         transport.connect.assert_called_once()
         print("Passed : testtransport_connect_to_server")
 
-    def testtransport_factory(self):
+    def testtransport_factory_with_password(self):
         """
         Test to check the factory method of the transport instance of the signal class.
         """
@@ -82,6 +85,88 @@ class SignalTest(unittest.TestCase):
             XmppTransport.factory("1", sig_dict["Signal"]["Overlays"]["A0FB389"], signal, signal._presence_publisher,
                                   None, None), XmppTransport))
         print("Passed : testtransport_factory")
+
+    def testtransport_factory_with_x509(self):
+        """
+        Test to check the factory method of the transport instance of the signal class.
+        """
+        sig_dict, signal = self.setup_vars_mocks()
+        sig_dict["Signal"]["Overlays"]["A0FB389"]["AuthenticationMethod"] = "x509"
+        sig_dict["Signal"]["Overlays"]["A0FB389"]["TrustStore"] = {}
+        sig_dict["Signal"]["Overlays"]["A0FB389"]["CertDirectory"] = "/home/cert"
+        sig_dict["Signal"]["Overlays"]["A0FB389"]["CertFile"] = "file1"
+        sig_dict["Signal"]["Overlays"]["A0FB389"]["Keyfile"] = "keyfile"
+        transport = XmppTransport.factory("1", sig_dict["Signal"]["Overlays"]["A0FB389"], signal,
+                                          signal._presence_publisher,
+                                          None, None)
+        self.assertTrue(isinstance(transport, XmppTransport))
+        assert transport.certfile == "/home/certfile1"
+        assert transport.keyfile == "/home/certkeyfile"
+        assert len(transport.ca_certs) == 0
+        print("Passed : testtransport_factory")
+
+    @patch('builtins.__import__')
+    def testtransport_factory_without_password(self, mock_return):
+        """
+        Test to check the factory method of the transport instance of the signal class.
+        """
+        sig_dict, signal = self.setup_vars_mocks()
+        mock_return.raiseError.side_effect = Exception()
+        sig_dict["Signal"]["Overlays"]["A0FB389"]["Password"] = None
+        transport = XmppTransport.factory("1", sig_dict["Signal"]["Overlays"]["A0FB389"], signal,
+                                          signal._presence_publisher,
+                                          None, None)
+        transport.add_event_handler = MagicMock()
+        transport.register_handler = MagicMock()
+        transport.get_roster = MagicMock()
+        self.assertTrue(isinstance(transport, XmppTransport))
+        print("Passed : testtransport_factory")
+
+    def testtransport_factory_without_user(self):
+        """
+        Test to check the factory method of the transport instance of the signal class.
+        """
+        sig_dict, signal = self.setup_vars_mocks()
+        sig_dict["Signal"]["Overlays"]["A0FB389"]["Username"] = None
+        with self.assertRaises(RuntimeError):
+            transport = XmppTransport.factory("1", sig_dict["Signal"]["Overlays"]["A0FB389"], signal,
+                                              signal._presence_publisher,
+                                              None, None)
+        print("Passed : testtransport_factory_without_user")
+
+    def testtransport_presence_event_handler(self):
+        sig_dict, signal = self.setup_vars_mocks()
+        transport = XmppTransport.factory("1", sig_dict["Signal"]["Overlays"]["A0FB389"], signal, signal._presence_publisher,
+                                  None, None)
+        presence = {"from" : "raj", "to" : "raj@ipop", "status" : "ident#12344323"}
+        raw = {"to" : "raj"}
+        transport.boundjid = JID("raj@ipop/ipop")
+        transport.send_msg = MagicMock()
+        jid_cache = Mock()
+        presence_publisher = Mock()
+        transport._presence_publisher = presence_publisher
+        transport._presence_publisher.post_update = MagicMock()
+        transport._jid_cache = jid_cache
+        transport._jid_cache.add_entry = MagicMock()
+        transport.presence_event_handler(presence)
+        transport.send_msg.assert_called_once()
+
+    def testtransport_presence_event_handler_with_uid(self):
+        sig_dict, signal = self.setup_vars_mocks()
+        transport = XmppTransport.factory("1", sig_dict["Signal"]["Overlays"]["A0FB389"], signal, signal._presence_publisher,
+                                  None, None)
+        presence = {"from" : "raj", "to" : "raj@ipop", "status" : "uid?#1234434323"}
+        raw = {"to" : "raj"}
+        transport.boundjid = JID("raj@ipop/ipop")
+        transport.send_msg = MagicMock()
+        jid_cache = Mock()
+        presence_publisher = Mock()
+        transport._presence_publisher = presence_publisher
+        transport._presence_publisher.post_update = MagicMock()
+        transport._jid_cache = jid_cache
+        transport._jid_cache.add_entry = MagicMock()
+        transport.presence_event_handler(presence)
+        transport.send_msg.assert_called_once()
 
     @patch("controller.modules.Signal.XmppTransport.factory")
     def testsignal_create_transport(self, mock_factory):
@@ -141,21 +226,23 @@ class SignalTest(unittest.TestCase):
         signal.complete_cbt.assert_called_once()
         print("Passed : testsignal_handle_remote_action_complete")
 
-    def testtransport_send_message(self):
+    @patch("controller.modules.Signal.XmppTransport.Message")
+    def testtransport_send_message(self, msg_mock):
         """
         Test to check the send message method of transport instance of the signal class.
         """
+        register_stanza_plugin(Message, IpopSignal)
         sig_dict, signal = self.setup_vars_mocks()
-
         transport = XmppTransport.factory("1", sig_dict["Signal"]["Overlays"]["A0FB389"], signal,
                                           signal._presence_publisher,
                                           None, None)
+        transport.registerHandler(
+            Callback("ipop", StanzaPath("message/ipop"), transport.message_listener))
         msg = transport.Message()
-        msg["to"] = "1"
-        print(msg["to"])
-        msg["from"] = "self.boundjid.full"
-        msg["type"] = "chat"
-        transport.send_msg("1", str("qw"), None)
+        msg_mock.return_value = msg
+        msg.send = MagicMock()
+        transport.send_msg("2", "invk", "Data")
+        msg.send.assert_called_once()
         print("Passed : testtransport_send_message")
 
     def testjid_cache_add_lookup_entry(self):
@@ -217,7 +304,7 @@ class SignalTest(unittest.TestCase):
         signal.submit_cbt(cbt)
         resp = CBT.Response()
         cbt.response = resp
-        rem_act = {"InitiatorId" : "1", "OverlayId" : "A0FB389"}
+        rem_act = {"InitiatorId": "1", "OverlayId": "A0FB389"}
         signal._remote_acts["1"] = rem_act
         signal.submit_cbt(cbt)
         signal.transmit_remote_act = MagicMock()
@@ -255,7 +342,7 @@ class SignalTest(unittest.TestCase):
                                           signal._presence_publisher,
                                           None, None)
         transport.send_presence = MagicMock()
-        signal._circles = {"A0FB389": {"JidCache": jid_cache, "Transport": transport, "OutgoingRemoteActs" : {}}}
+        signal._circles = {"A0FB389": {"JidCache": jid_cache, "Transport": transport, "OutgoingRemoteActs": {}}}
         signal.transmit_remote_act(rem_act, "1", "invk")
         transport.send_presence.assert_called_once()
         print("Passed : testtransmit_remote_act_nopeer_jid")
@@ -360,7 +447,7 @@ class SignalTest(unittest.TestCase):
         """
         Test to check if scavenge of pending CBT works with one above the request timeout.
         """
-        cfxObject = CFX()
+        cfxObject = Mock()
         cfx_handle = CFxHandle(cfxObject)
         module = importlib.import_module("controller.modules.{0}"
                                          .format("Signal"))
@@ -389,15 +476,41 @@ class SignalTest(unittest.TestCase):
         cbt2.tag = "2"
         cbt2.time_submit = time.time() - 1
         signal.complete_cbt = MagicMock()
-        signal._cfx_handle._pending_cbts.update({"0" : cbt1})
+        signal._cfx_handle._pending_cbts.update({"0": cbt1})
         signal._cfx_handle._pending_cbts.update({"1": cbt2})
         assert len(signal._cfx_handle._pending_cbts.items()) == 2
         signal.scavenge_pending_cbts()
         assert len(signal._cfx_handle._pending_cbts.items()) == 1
         items = {}
-        items.update({"1" : cbt2})
+        items.update({"1": cbt2})
         assert signal._cfx_handle._pending_cbts == items
         print("Passed : testsignal_scavenge_pending_cbts")
+
+    def testsignal_scavenge_expired_outgoing_rem_acts_single_entry(self):
+        sig_dict, signal = self.setup_vars_mocks()
+        signal.request_timeout = 3
+        item = {0: "invk", 1: {"ActionTag": "1"}, 2: 5}
+        q = Queue()
+        q.put_nowait(item)
+        outgoing_rem_acts = {"1": q}
+        signal.complete_cbt = MagicMock()
+        signal.scavenge_expired_outgoing_rem_acts(outgoing_rem_acts)
+        signal.complete_cbt.assert_called_once()
+
+    def testsignal_scavenge_expired_outgoing_rem_acts_multiple_entries(self):
+        sig_dict, signal = self.setup_vars_mocks()
+        signal.request_timeout = 3
+        item1 = {0: "invk", 1: {"ActionTag": "1"}, 2: 5}
+        item2 = {0: "invk", 1: {"ActionTag": "2"}, 2: 6}
+        q = Queue()
+        q.put_nowait(item1)
+        q.put_nowait(item2)
+        outgoing_rem_acts = {"1": q}
+        assert outgoing_rem_acts["1"].qsize() == 2
+        signal.complete_cbt = MagicMock()
+        signal.scavenge_expired_outgoing_rem_acts(outgoing_rem_acts)
+        assert len(outgoing_rem_acts) == 0
+        assert signal.complete_cbt.call_count == 2
 
 
 if __name__ == '__main__':
