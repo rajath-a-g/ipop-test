@@ -84,11 +84,11 @@ class SignalTest(unittest.TestCase):
         self.assertTrue(isinstance(
             XmppTransport.factory("1", sig_dict["Signal"]["Overlays"]["A0FB389"], signal, signal._presence_publisher,
                                   None, None), XmppTransport))
-        print("Passed : testtransport_factory")
+        print("Passed : testtransport_factory_with_password")
 
     def testtransport_factory_with_x509(self):
         """
-        Test to check the factory method of the transport instance of the signal class.
+        Test to check the factory method of the transport instance with x509 auth_method of the signal class.
         """
         sig_dict, signal = self.setup_vars_mocks()
         sig_dict["Signal"]["Overlays"]["A0FB389"]["AuthenticationMethod"] = "x509"
@@ -103,12 +103,12 @@ class SignalTest(unittest.TestCase):
         assert transport.certfile == "/home/certfile1"
         assert transport.keyfile == "/home/certkeyfile"
         assert len(transport.ca_certs) == 0
-        print("Passed : testtransport_factory")
+        print("Passed : testtransport_factory_with_x509")
 
     @patch('builtins.__import__')
     def testtransport_factory_without_password(self, mock_return):
         """
-        Test to check the factory method of the transport instance of the signal class.
+        Test to check the factory method of the transport instance without the password of the signal class.
         """
         sig_dict, signal = self.setup_vars_mocks()
         mock_return.raiseError.side_effect = Exception()
@@ -120,11 +120,11 @@ class SignalTest(unittest.TestCase):
         transport.register_handler = MagicMock()
         transport.get_roster = MagicMock()
         self.assertTrue(isinstance(transport, XmppTransport))
-        print("Passed : testtransport_factory")
+        print("Passed : testtransport_factory_without_password")
 
     def testtransport_factory_without_user(self):
         """
-        Test to check the factory method of the transport instance of the signal class.
+        Test to check the factory method of the transport instance without the username of the signal class.
         """
         sig_dict, signal = self.setup_vars_mocks()
         sig_dict["Signal"]["Overlays"]["A0FB389"]["Username"] = None
@@ -135,11 +135,14 @@ class SignalTest(unittest.TestCase):
         print("Passed : testtransport_factory_without_user")
 
     def testtransport_presence_event_handler(self):
+        """
+        Test to check the presence method with ident of the signal class.
+        """
         sig_dict, signal = self.setup_vars_mocks()
-        transport = XmppTransport.factory("1", sig_dict["Signal"]["Overlays"]["A0FB389"], signal, signal._presence_publisher,
-                                  None, None)
-        presence = {"from" : "raj", "to" : "raj@ipop", "status" : "ident#12344323"}
-        raw = {"to" : "raj"}
+        transport = XmppTransport.factory("1", sig_dict["Signal"]["Overlays"]["A0FB389"], signal,
+                                          signal._presence_publisher,
+                                          None, None)
+        presence = {"from": "raj", "to": "raj@ipop", "status": "ident#12344323"}
         transport.boundjid = JID("raj@ipop/ipop")
         transport.send_msg = MagicMock()
         jid_cache = Mock()
@@ -150,13 +153,17 @@ class SignalTest(unittest.TestCase):
         transport._jid_cache.add_entry = MagicMock()
         transport.presence_event_handler(presence)
         transport.send_msg.assert_called_once()
+        print("Passed : testtransport_presence_event_handler")
 
     def testtransport_presence_event_handler_with_uid(self):
+        """
+        Test to check the presence method with uid of the signal class.
+        """
         sig_dict, signal = self.setup_vars_mocks()
-        transport = XmppTransport.factory("1", sig_dict["Signal"]["Overlays"]["A0FB389"], signal, signal._presence_publisher,
-                                  None, None)
-        presence = {"from" : "raj", "to" : "raj@ipop", "status" : "uid?#1234434323"}
-        raw = {"to" : "raj"}
+        transport = XmppTransport.factory("1", sig_dict["Signal"]["Overlays"]["A0FB389"], signal,
+                                          signal._presence_publisher,
+                                          None, None)
+        presence = {"from": "raj", "to": "raj@ipop", "status": "uid?#1234434323"}
         transport.boundjid = JID("raj@ipop/ipop")
         transport.send_msg = MagicMock()
         jid_cache = Mock()
@@ -167,6 +174,78 @@ class SignalTest(unittest.TestCase):
         transport._jid_cache.add_entry = MagicMock()
         transport.presence_event_handler(presence)
         transport.send_msg.assert_called_once()
+        print("Passed : testtransport_presence_event_handler_with_uid")
+
+    def testtransport_presence_event_handler_with_no_status(self):
+        """
+        Test to check the presence method with no valid status of the signal class.
+        """
+        sig_dict, signal = self.setup_vars_mocks()
+        transport = XmppTransport.factory("1", sig_dict["Signal"]["Overlays"]["A0FB389"], signal,
+                                          signal._presence_publisher,
+                                          None, None)
+        presence = {"from": "raj", "to": "raj@ipop", "status": "ipop?#1234434323"}
+        transport.boundjid = JID("raj@ipop/ipop")
+        jid_cache = Mock()
+        presence_publisher = Mock()
+        transport._presence_publisher = presence_publisher
+        transport._presence_publisher.post_update = MagicMock()
+        transport._jid_cache = jid_cache
+        transport._jid_cache.add_entry = MagicMock()
+        transport._sig.sig_log = MagicMock()
+        transport.presence_event_handler(presence)
+        transport._sig.sig_log.assert_called_once()
+        print("Passed : testtransport_presence_event_handler_with_uid")
+
+    def testtransport_presence_event_handler_with_exception(self):
+        """
+        Test to check the presence method with an exception raised of the signal class.
+        """
+        sig_dict, signal = self.setup_vars_mocks()
+        transport = XmppTransport.factory("1", sig_dict["Signal"]["Overlays"]["A0FB389"], signal,
+                                          signal._presence_publisher,
+                                          None, None)
+        presence = {"from": "raj", "to": "raj@ipop", "status": "uid?#1234434323"}
+        transport.boundjid = JID("raj@ipop/ipop")
+        transport.send_msg = MagicMock()
+        transport.send_msg.side_effect = Exception()
+        jid_cache = Mock()
+        presence_publisher = Mock()
+        transport._presence_publisher = presence_publisher
+        transport._presence_publisher.post_update = MagicMock()
+        transport._jid_cache = jid_cache
+        transport._jid_cache.add_entry = MagicMock()
+        transport._sig.sig_log = MagicMock()
+        transport.presence_event_handler(presence)
+        transport.send_msg.assert_called_once()
+        transport._sig.sig_log.assert_called_once()
+        print("Passed : testtransport_presence_event_handler_with_uid")
+
+    def testtransport_message_listener_with_uid(self):
+        """
+        Test to check the message_listener method with uid of the signal class.
+        """
+        sig_dict, signal = self.setup_vars_mocks()
+        transport = XmppTransport.factory("1", sig_dict["Signal"]["Overlays"]["A0FB389"], signal,
+                                          signal._presence_publisher,
+                                          None, None)
+        transport._jid_cache = JidCache(signal, 30)
+        register_stanza_plugin(Message, IpopSignal)
+        msg = Message()
+        msg["from"] = "ipop"
+        transport.boundjid.full = "edgevpn"
+        msg["ipop"]["type"] = "uid!"
+        msg["ipop"]["payload"] = "123#456"
+        item = {0: "invk", 1: {"ActionTag": "1"}, 2: 5}
+        q = Queue()
+        q.put_nowait(item)
+        outgoing_rem_acts = {"456": q}
+        transport._outgoing_rem_acts = outgoing_rem_acts
+        transport.send_msg = MagicMock()
+        transport.message_listener(msg)
+        assert transport._jid_cache.lookup("456") == "123"
+        transport.send_msg.assert_called_once()
+        print("Passed : testtransport_presence_event_handler_with_uid")
 
     @patch("controller.modules.Signal.XmppTransport.factory")
     def testsignal_create_transport(self, mock_factory):
@@ -487,6 +566,9 @@ class SignalTest(unittest.TestCase):
         print("Passed : testsignal_scavenge_pending_cbts")
 
     def testsignal_scavenge_expired_outgoing_rem_acts_single_entry(self):
+        """
+        Test to check scavenge remote actions method with a single entry of the signal class.
+        """
         sig_dict, signal = self.setup_vars_mocks()
         signal.request_timeout = 3
         item = {0: "invk", 1: {"ActionTag": "1"}, 2: 5}
@@ -496,8 +578,12 @@ class SignalTest(unittest.TestCase):
         signal.complete_cbt = MagicMock()
         signal.scavenge_expired_outgoing_rem_acts(outgoing_rem_acts)
         signal.complete_cbt.assert_called_once()
+        print("Passed : testsignal_scavenge_expired_outgoing_rem_acts_single_entry")
 
     def testsignal_scavenge_expired_outgoing_rem_acts_multiple_entries(self):
+        """
+        Test to check scavenge remote actions method with multiple entries of the signal class.
+        """
         sig_dict, signal = self.setup_vars_mocks()
         signal.request_timeout = 3
         item1 = {0: "invk", 1: {"ActionTag": "1"}, 2: 5}
@@ -511,6 +597,7 @@ class SignalTest(unittest.TestCase):
         signal.scavenge_expired_outgoing_rem_acts(outgoing_rem_acts)
         assert len(outgoing_rem_acts) == 0
         assert signal.complete_cbt.call_count == 2
+        print("Passed : testsignal_scavenge_expired_outgoing_rem_acts_multiple_entries")
 
 
 if __name__ == '__main__':
