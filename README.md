@@ -8,7 +8,7 @@ python -m unittest D:/UF/OPS/Work/code/Controllers/controller/test/SignalTest.py
 
 # Known problems
 
-The terminal freezes and does not come back to the prompt after the tests have been run. - Have to fix
+None
 
 # Running the coverage tool
 1) Install the coverage tool 
