@@ -8,21 +8,11 @@ from unittest.mock import MagicMock, Mock, patch
 from sleekxmpp import register_stanza_plugin, Message, Callback, StanzaPath, JID
 
 from controller.framework.CBT import CBT
-from controller.framework.CFx import CFX
 from controller.framework.CFxHandle import CFxHandle
-
 from controller.modules.Signal import XmppTransport, JidCache, IpopSignal
 
 
 class SignalTest(unittest.TestCase):
-    _cm_config = {"NodeId": "1"}
-    overlay_descr = {
-        "HostAddress": "1.0.0.0",
-        "Port": "5222",
-        "Username": "test",
-        "Password": "admin",
-        "AuthenticationMethod": "PASSWORD"
-    }
 
     def setup_vars_mocks(self):
         """
@@ -33,30 +23,35 @@ class SignalTest(unittest.TestCase):
         module = importlib.import_module("controller.modules.{0}"
                                          .format("Signal"))
         module_class = getattr(module, "Signal")
-        sig_dict = {"Signal": {"Enabled": True,
-                               "Overlays": {
-                                   "A0FB389": {
-                                       "HostAddress": "1.1.1.1",
-                                       "Port": "5222",
-                                       "Username": "raj",
-                                       "Password": "raj",
-                                       "AuthenticationMethod": "PASSWORD"
-                                   }
-                               }
-                               },
-                    "NodeId": "1234434323"
+        sig_dict = {
+            "Signal": {
+                "Enabled": True,
+                "PresenceInterval": 10,
+                "CacheExpiry": 5,
+                "Overlays": {
+                    "A0FB389": {
+                        "HostAddress": "1.1.1.1",
+                        "Port": "5222",
+                        "Username": "raj",
+                        "Password": "raj",
+                        "AuthenticationMethod": "PASSWORD"
                     }
-        signal = module_class(cfx_handle, sig_dict, "Signal")
+                },
+                "NodeId": "1234434323"
+            }
+        }
+        signal = module_class(cfx_handle, sig_dict["Signal"], "Signal")
         cfx_handle._cm_instance = signal
-        cfx_handle._cm_config = sig_dict
+        cfx_handle._cm_config = sig_dict["Signal"]
         return sig_dict, signal
 
     def testtransport_start_event_handler(self):
         """
         Test to check the start of the event handler of the signal class.
         """
-        self.sig_log = MagicMock()
-        transport = XmppTransport.factory(1, self.overlay_descr, self, None, None, None)
+        sig_dict, signal = self.setup_vars_mocks()
+        transport = XmppTransport.factory(1, sig_dict["Signal"]["Overlays"]["A0FB389"], signal, None, None, None)
+        transport._sig.sig_log = MagicMock()
         transport.add_event_handler = MagicMock()
         transport.register_handler = MagicMock()
         transport.get_roster = MagicMock()
@@ -69,11 +64,15 @@ class SignalTest(unittest.TestCase):
         """
         Test to check the connect to server of the transport instance of the signal class.
         """
-        self.sig_log = MagicMock()
-        transport = XmppTransport.factory(1, self.overlay_descr, self, None, None, None)
+        sig_dict, signal = self.setup_vars_mocks()
+        transport = XmppTransport.factory(1, sig_dict["Signal"]["Overlays"]["A0FB389"], signal, None, None, None)
+        transport._sig.sig_log = MagicMock()
         transport.connect = MagicMock()
+        transport.process = MagicMock()
         XmppTransport.connect_to_server(transport)
+        transport._sig.sig_log.assert_called_once()
         transport.connect.assert_called_once()
+        transport.process.assert_called_once()
         print("Passed : testtransport_connect_to_server")
 
     def testtransport_factory_with_password(self):
@@ -105,13 +104,11 @@ class SignalTest(unittest.TestCase):
         assert len(transport.ca_certs) == 0
         print("Passed : testtransport_factory_with_x509")
 
-    @patch('builtins.__import__')
-    def testtransport_factory_without_password(self, mock_return):
+    def testtransport_factory_without_password(self):
         """
         Test to check the factory method of the transport instance without the password of the signal class.
         """
         sig_dict, signal = self.setup_vars_mocks()
-        mock_return.raiseError.side_effect = Exception()
         sig_dict["Signal"]["Overlays"]["A0FB389"]["Password"] = None
         transport = XmppTransport.factory("1", sig_dict["Signal"]["Overlays"]["A0FB389"], signal,
                                           signal._presence_publisher,
@@ -247,6 +244,63 @@ class SignalTest(unittest.TestCase):
         transport.send_msg.assert_called_once()
         print("Passed : testtransport_presence_event_handler_with_uid")
 
+    def testtransport_message_listener_with_announce_to_same_node(self):
+        """
+        Test to check the message_listener method with announce to the same of the signal class.
+        """
+        sig_dict, signal = self.setup_vars_mocks()
+        transport = XmppTransport.factory("1", sig_dict["Signal"]["Overlays"]["A0FB389"], signal,
+                                          signal._presence_publisher,
+                                          None, None)
+        transport._jid_cache = JidCache(signal, 30)
+        register_stanza_plugin(Message, IpopSignal)
+        msg = Message()
+        msg["from"] = "ipop"
+        transport.boundjid.full = "edgevpn"
+        msg["ipop"]["type"] = "announce"
+        msg["ipop"]["payload"] = "123#456"
+        sig_dict["Signal"]["NodeId"] = "456"
+        transport.send_msg = MagicMock()
+        transport._presence_publisher = Mock()
+        transport._presence_publisher.post_update = MagicMock()
+        transport.message_listener(msg)
+        self.assertEqual(transport._jid_cache.lookup("456"), None)
+        transport.send_msg.assert_not_called()
+        transport._presence_publisher.post_update.assert_not_called()
+        print("Passed : testtransport_message_listener_with_announce_to_same_node")
+
+    def testtransport_message_listener_with_announce_to_different_node(self):
+        """
+        Test to check the message_listener method with announce to a different node of the signal class.
+        """
+        sig_dict, signal = self.setup_vars_mocks()
+        transport = XmppTransport.factory("1", sig_dict["Signal"]["Overlays"]["A0FB389"], signal,
+                                          signal._presence_publisher,
+                                          None, None)
+        transport._jid_cache = JidCache(signal, 30)
+        register_stanza_plugin(Message, IpopSignal)
+        msg = Message()
+        msg["from"] = "ipop"
+        transport.boundjid.full = "edgevpn"
+        msg["ipop"]["type"] = "announce"
+        msg["ipop"]["payload"] = "123#456"
+        transport._presence_publisher = Mock()
+        transport._presence_publisher.post_update = MagicMock()
+        transport.message_listener(msg)
+        self.assertEqual(transport._jid_cache.lookup("456"), "123")
+        transport._presence_publisher.post_update.assert_called_once()
+        print("Passed : testtransport_message_listener_with_announce_to_same_node")
+
+    def testsignal_initialize(self):
+        """
+        Test to check the initialize method of the signal class.
+        """
+        sig_dict, signal = self.setup_vars_mocks()
+        signal._create_transport_instance = MagicMock()
+        signal.initialize()
+        signal._create_transport_instance.assert_called_once()
+        print("Passed : testsignal_initialize")
+
     @patch("controller.modules.Signal.XmppTransport.factory")
     def testsignal_create_transport(self, mock_factory):
         """
@@ -266,11 +320,11 @@ class SignalTest(unittest.TestCase):
                                        "Password": "raj",
                                        "AuthenticationMethod": "PASSWORD"
                                    }
-                               }
                                },
-                    "NodeId": "1234434323"
+                               "NodeId": "1234434323"
+                               }
                     }
-        signal = module_class(cfx_handle, sig_dict, "Signal")
+        signal = module_class(cfx_handle, sig_dict["Signal"], "Signal")
         cfx_handle._cm_instance = signal
         cfx_handle._cm_config = sig_dict
         transport = XmppTransport(sig_dict["Signal"]["Overlays"]["A0FB389"]["Username"],
@@ -602,4 +656,3 @@ class SignalTest(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
-    unittest.doModuleCleanups()
