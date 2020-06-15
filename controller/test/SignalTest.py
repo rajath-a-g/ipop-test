@@ -1,3 +1,24 @@
+# ipop-project
+# Copyright 2016, University of Florida
+#
+# Permission is hereby granted, free of charge, to any person obtaining a copy
+# of this software and associated documentation files (the "Software"), to deal
+# in the Software without restriction, including without limitation the rights
+# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+# copies of the Software, and to permit persons to whom the Software is
+# furnished to do so, subject to the following conditions:
+#
+# The above copyright notice and this permission notice shall be included in
+# all copies or substantial portions of the Software.
+#
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL THE
+# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+# THE SOFTWARE.
+
 import importlib
 import time
 import unittest
@@ -291,6 +312,29 @@ class SignalTest(unittest.TestCase):
         transport._presence_publisher.post_update.assert_called_once()
         print("Passed : testtransport_message_listener_with_announce_to_same_node")
 
+    @patch('json.loads')
+    def testtransport_message_listener_with_invk(self, mock_loads):
+        """
+        Test to check the message_listener method with invk to a different node of the signal class.
+        """
+        sig_dict, signal = self.setup_vars_mocks()
+        mock_loads.return_value = MagicMock()
+        transport = XmppTransport.factory("1", sig_dict["Signal"]["Overlays"]["A0FB389"], signal,
+                                          signal._presence_publisher,
+                                          None, None)
+        transport._jid_cache = JidCache(signal, 30)
+        register_stanza_plugin(Message, IpopSignal)
+        msg = Message()
+        msg["from"] = "ipop"
+        transport.boundjid.full = "edgevpn"
+        msg["ipop"]["type"] = "invk"
+        msg["ipop"]["payload"] = {"Action": "announce"}
+        transport._sig.handle_remote_action = MagicMock()
+        transport.message_listener(msg)
+        mock_loads.assert_called_once()
+        transport._sig.handle_remote_action.assert_called_once()
+        print("Passed : testtransport_message_listener_with_invk")
+
     def testsignal_initialize(self):
         """
         Test to check the initialize method of the signal class.
@@ -446,6 +490,23 @@ class SignalTest(unittest.TestCase):
         signal.transmit_remote_act.assert_called_once()
         signal.free_cbt.assert_called_once()
         print("Passed : testsignal_resp_handler_remote_action")
+
+    def testsignal_req_handler_query_reporting_data(self):
+        """
+        Test to check the reporting of data method of the signal class.
+        """
+        sig_dict, signal = self.setup_vars_mocks()
+        cbt = CBT()
+        transport = XmppTransport.factory("1", sig_dict["Signal"]["Overlays"]["A0FB389"], signal,
+                                          signal._presence_publisher,
+                                          None, None)
+        transport._host = "IPOP"
+        transport.boundjid.full = "ipopuser"
+        signal._circles = {"A0FB389": {"Transport": transport}}
+        signal.complete_cbt = MagicMock()
+        signal.req_handler_query_reporting_data(cbt)
+        signal.complete_cbt.assert_called_once()
+        print("Passed : testsignal_req_handler_query_reporting_data")
 
     def testtransmit_remote_act(self):
         """
@@ -652,6 +713,27 @@ class SignalTest(unittest.TestCase):
         assert len(outgoing_rem_acts) == 0
         assert signal.complete_cbt.call_count == 2
         print("Passed : testsignal_scavenge_expired_outgoing_rem_acts_multiple_entries")
+
+    def testsignal_timer_method(self):
+        """
+        Test to check the timer method of the signal class.
+        """
+        sig_dict, signal = self.setup_vars_mocks()
+        transport = XmppTransport.factory("1", sig_dict["Signal"]["Overlays"]["A0FB389"], signal,
+                                          signal._presence_publisher,
+                                          None, None)
+        rem_acts = {}
+        jid_cache = JidCache(signal, 5)
+        transport.send_presence = MagicMock()
+        jid_cache.scavenge = MagicMock()
+        signal.scavenge_pending_cbts = MagicMock()
+        signal._circles = {
+            "A0FB389": {"Announce": 0, "Transport": transport, "OutgoingRemoteActs": rem_acts, "JidCache": jid_cache}}
+        signal.timer_method()
+        transport.send_presence.assert_called_once()
+        jid_cache.scavenge.assert_called_once()
+        signal.scavenge_pending_cbts.assert_called_once()
+        print("Passed : testsignal_timer_method")
 
 
 if __name__ == '__main__':

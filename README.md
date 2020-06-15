@@ -5,6 +5,8 @@ Development of tests for ipop-project
 ```
 python -m unittest D:/UF/OPS/Work/code/Controllers/controller/test/SignalTest.py
 ```
+# Number of Tests
+	There 36 tests in total with coverage of 91 percent.
 
 # Known problems
 
