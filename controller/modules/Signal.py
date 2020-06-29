@@ -18,24 +18,20 @@
 # LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 # THE SOFTWARE.
-
+import asyncio
 import ssl
 import time
 import threading
 from queue import Queue
+
 try:
     import simplejson as json
 except ImportError:
     import json
 import random
-import sleekxmpp
-from sleekxmpp.xmlstream.stanzabase import ElementBase, JID
-from sleekxmpp.xmlstream import register_stanza_plugin
-from sleekxmpp.xmlstream.handler.callback import Callback
-from sleekxmpp.xmlstream.matcher import StanzaPath
-from sleekxmpp.stanza.message import Message
-from controller.framework.ControllerModule import ControllerModule
 import slixmpp
+from slixmpp import ElementBase, register_stanza_plugin, Message, Callback, StanzaPath, JID
+from controller.framework.ControllerModule import ControllerModule
 
 
 class IpopSignal(ElementBase):
@@ -76,9 +72,9 @@ class JidCache:
         return jid
 
 
-class XmppTransport(sleekxmpp.ClientXMPP):
+class XmppTransport(slixmpp.ClientXMPP):
     def __init__(self, jid, password, sasl_mech):
-        sleekxmpp.ClientXMPP.__init__(self, jid, password, sasl_mech=sasl_mech)
+        slixmpp.ClientXMPP.__init__(self, jid, password, sasl_mech=sasl_mech)
         self._overlay_id = None
         # self.overlay_descr = None
         self._sig = None
@@ -136,7 +132,6 @@ class XmppTransport(sleekxmpp.ClientXMPP):
             raise RuntimeError("Invalid authentication method specified in configuration: {0}"
                                .format(auth_method))
         # pylint: disable=protected-access
-
         transport._host = host
         transport._port = port
         transport._overlay_id = overlay_id
@@ -162,7 +157,7 @@ class XmppTransport(sleekxmpp.ClientXMPP):
                                    self.presence_event_handler)
             # Register IPOP message with the server
             register_stanza_plugin(Message, IpopSignal)
-            self.registerHandler(
+            self.register_handler(
                 Callback("ipop", StanzaPath("message/ipop"), self.message_listener))
             # Get the friends list for the user
             self.get_roster()
@@ -218,22 +213,27 @@ class XmppTransport(sleekxmpp.ClientXMPP):
         """
         try:
             sender_jid = msg["from"]
+            self._sig.sig_log("Received message from: {0}".format(sender_jid))
             # discard the message if it was initiated by this node
             if sender_jid == self.boundjid.full:
                 return
             # extract header and content
             msg_type = msg["ipop"]["type"]
             msg_payload = msg["ipop"]["payload"]
+            self._sig.sig_log("Inside message listener with message: {0}".format(msg))
             if msg_type == "uid!":
                 match_jid, matched_uid = msg_payload.split("#")
                 # put the learned JID in cache
                 self._jid_cache.add_entry(matched_uid, match_jid)
+                self._sig.sig_log("Successfully put the uid {0} with jid {1} in the cache".format(matched_uid, match_jid))
                 # send the remote actions that are waiting on JID refresh
                 rm_que = self._outgoing_rem_acts.get(matched_uid, Queue())
                 while not rm_que.empty():
                     entry = rm_que.get()
                     msg_type, msg_data = entry[0], entry[1]
+                    self._sig.sig_log("Preparing to send message to {0} with type {1} and data {2}".format(match_jid, msg_type, msg_data))
                     self.send_msg(match_jid, msg_type, json.dumps(msg_data))
+                    self._sig.sig_log("Successfully sent message to {0}".format(match_jid))
                     self._sig.sig_log("Sent remote action: {0}".format(msg_payload))
             elif msg_type == "announce":
                 peer_jid, peer_id = msg_payload.split("#")
@@ -246,6 +246,7 @@ class XmppTransport(sleekxmpp.ClientXMPP):
                     dict(PeerId=peer_id, OverlayId=self._overlay_id, PresenceTimestamp=pts))
             elif msg_type in ("invk", "cmpt"):
                 rem_act = json.loads(msg_payload)
+                self._sig.sig_log("Received a message to {0} with message as: {1}".format(msg_type, msg))
                 self._sig.handle_remote_action(self._overlay_id, rem_act, msg_type)
             else:
                 self._sig.sig_log("Invalid message type received {0}".format(str(msg)),
@@ -262,19 +263,24 @@ class XmppTransport(sleekxmpp.ClientXMPP):
         msg["type"] = "chat"
         msg["ipop"]["type"] = msg_type
         msg["ipop"]["payload"] = payload
+        self._sig.sig_log("In send_msg with message: {0}".format(msg))
         msg.send()
 
     def connect_to_server(self,):
         try:
-            if self.connect(address=(self._host, self._port)):
-                self.process(block=False)
-                self._sig.sig_log("Starting overlay {0} connection to XMPP server {1}:{2}"
+            self.connect(address=(self._host, self._port))
+            self._sig.sig_log("Starting overlay {0} connection to XMPP server {1}:{2}"
                                   .format(self._overlay_id, self._host, self._port))
         except Exception as err:
             self._sig.sig_log("Failed to initialize XMPP transport instanace {}".format(str(err)),
                               "LOG_ERROR")
 
+    def start_process(self):
+        self._sig.sig_log("Started processing in a new thread for host {0}".format(self._host))
+        asyncio.ensure_future(self.loop.run_in_executor(None, self.process), loop=self.loop)
+
     def shutdown(self,):
+        self.loop.close()
         self.disconnect()
 
 
@@ -292,6 +298,7 @@ class Signal(ControllerModule):
         xport = XmppTransport.factory(overlay_id, overlay_descr, self, self._presence_publisher,
                                       jid_cache, outgoing_rem_acts)
         xport.connect_to_server()
+        xport.start_process()
         return xport
 
     def initialize(self):
@@ -446,7 +453,7 @@ class Signal(ControllerModule):
                                                                          self.node_id)
                     self._circles[overlay_id]["Announce"] = time.time() + \
                         (int(self.config["PresenceInterval"]) * random.randint(2, 20))
-                self._circles[overlay_id]["JidCache"].scavenge()
+                #self._circles[overlay_id]["JidCache"].scavenge()
                 self.scavenge_expired_outgoing_rem_acts(self._circles[overlay_id]
                                                         ["OutgoingRemoteActs"])
             self.scavenge_pending_cbts()
