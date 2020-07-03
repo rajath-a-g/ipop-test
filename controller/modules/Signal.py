@@ -22,6 +22,7 @@ import asyncio
 import ssl
 import time
 import threading
+from concurrent import futures
 from queue import Queue
 
 try:
@@ -55,7 +56,7 @@ class JidCache:
             self._cache[node_id] = (jid, ts)
         return ts
 
-    def scavenge(self,):
+    def scavenge(self, ):
         with self._lck:
             curr_time = time.time()
             keys_to_be_deleted = \
@@ -85,6 +86,7 @@ class XmppTransport(slixmpp.ClientXMPP):
         self._cbt_to_action_tag = {}  # maps remote action tags to cbt tags
         self._host = None
         self._port = None
+        self.event_loop = None
 
     @staticmethod
     def factory(overlay_id, overlay_descr, cm_mod, presence_publisher, jid_cache,
@@ -102,7 +104,7 @@ class XmppTransport(slixmpp.ClientXMPP):
         auth_method = overlay_descr.get("AuthenticationMethod", "Password")
         if auth_method == "x509" and (user is not None or pswd is not None):
             er_log = "x509 Authentication is enbabled but credentials " \
-                "exists in IPOP configuration file; x509 will be used."
+                     "exists in IPOP configuration file; x509 will be used."
             cm_mod.sig_log(er_log, "LOG_WARNING")
         if auth_method == "x509":
             transport = XmppTransport(None, None, sasl_mech="EXTERNAL")
@@ -160,7 +162,7 @@ class XmppTransport(slixmpp.ClientXMPP):
             self.register_handler(
                 Callback("ipop", StanzaPath("message/ipop"), self.message_listener))
             # Get the friends list for the user
-            self.get_roster()
+            asyncio.ensure_future(self.get_roster(), loop=self.loop)
             # Send sign-on presence
             self.send_presence(pstatus="ident#" + self._node_id)
         except Exception as err:
@@ -175,11 +177,11 @@ class XmppTransport(slixmpp.ClientXMPP):
             presence_sender = presence["from"]
             presence_receiver_jid = JID(presence["to"])
             presence_receiver = str(presence_receiver_jid.user) + "@" \
-                + str(presence_receiver_jid.domain)
+                                + str(presence_receiver_jid.domain)
             status = presence["status"]
             # self._sig.sig_log("Presence Overlay:{0} Local JID:{1} Msg:{2}".
             #                   format(self._overlay_id, self.boundjid, presence))
-            if(presence_receiver == self.boundjid.bare and presence_sender != self.boundjid.full):
+            if (presence_receiver == self.boundjid.bare and presence_sender != self.boundjid.full):
                 if (status != "" and "#" in status):
                     pstatus, peer_id = status.split("#")
                     if pstatus == "ident":
@@ -225,13 +227,16 @@ class XmppTransport(slixmpp.ClientXMPP):
                 match_jid, matched_uid = msg_payload.split("#")
                 # put the learned JID in cache
                 self._jid_cache.add_entry(matched_uid, match_jid)
-                self._sig.sig_log("Successfully put the uid {0} with jid {1} in the cache".format(matched_uid, match_jid))
+                self._sig.sig_log(
+                    "Successfully put the uid {0} with jid {1} in the cache".format(matched_uid, match_jid))
                 # send the remote actions that are waiting on JID refresh
                 rm_que = self._outgoing_rem_acts.get(matched_uid, Queue())
                 while not rm_que.empty():
                     entry = rm_que.get()
                     msg_type, msg_data = entry[0], entry[1]
-                    self._sig.sig_log("Preparing to send message to {0} with type {1} and data {2}".format(match_jid, msg_type, msg_data))
+                    self._sig.sig_log(
+                        "Preparing to send message to {0} with type {1} and data {2}".format(match_jid, msg_type,
+                                                                                             msg_data))
                     self.send_msg(match_jid, msg_type, json.dumps(msg_data))
                     self._sig.sig_log("Successfully sent message to {0}".format(match_jid))
                     self._sig.sig_log("Sent remote action: {0}".format(msg_payload))
@@ -264,22 +269,27 @@ class XmppTransport(slixmpp.ClientXMPP):
         msg["ipop"]["type"] = msg_type
         msg["ipop"]["payload"] = payload
         self._sig.sig_log("In send_msg with message: {0}".format(msg))
-        msg.send()
+        self.loop.call_soon_threadsafe(msg.send)
 
-    def connect_to_server(self,):
+
+    def connect_to_server(self, ):
         try:
             self.connect(address=(self._host, self._port))
             self._sig.sig_log("Starting overlay {0} connection to XMPP server {1}:{2}"
-                                  .format(self._overlay_id, self._host, self._port))
+                              .format(self._overlay_id, self._host, self._port))
         except Exception as err:
             self._sig.sig_log("Failed to initialize XMPP transport instanace {}".format(str(err)),
                               "LOG_ERROR")
 
     def start_process(self):
+        self.event_loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(self.event_loop)
         self._sig.sig_log("Started processing in a new thread for host {0}".format(self._host))
-        asyncio.ensure_future(self.loop.run_in_executor(None, self.process), loop=self.loop)
+        self.loop.set_debug(enabled=True)
+        self.loop.run_forever()
 
-    def shutdown(self,):
+    def shutdown(self, ):
+        self.loop.stop()
         self.loop.close()
         self.disconnect()
 
@@ -298,7 +308,7 @@ class Signal(ControllerModule):
         xport = XmppTransport.factory(overlay_id, overlay_descr, self, self._presence_publisher,
                                       jid_cache, outgoing_rem_acts)
         xport.connect_to_server()
-        xport.start_process()
+        threading.Thread(target=xport.start_process, daemon=True).start()
         return xport
 
     def initialize(self):
@@ -307,7 +317,7 @@ class Signal(ControllerModule):
             overlay_descr = self.overlays[overlay_id]
             self._circles[overlay_id] = {}
             self._circles[overlay_id]["Announce"] = time.time() + \
-                (int(self.config["PresenceInterval"]) * random.randint(1, 3))
+                                                    (int(self.config["PresenceInterval"]) * random.randint(1, 3))
             self._circles[overlay_id]["JidCache"] = \
                 JidCache(self, self._cm_config["CacheExpiry"])
             self._circles[overlay_id]["OutgoingRemoteActs"] = {}
@@ -449,11 +459,12 @@ class Signal(ControllerModule):
             for overlay_id in self._circles:
                 anc = self._circles[overlay_id]["Announce"]
                 if time.time() >= anc:
-                    self._circles[overlay_id]["Transport"].send_presence(pstatus="ident#" +
-                                                                         self.node_id)
+                    self._circles[overlay_id]["Transport"].event_loop.call_soon_threadsafe(lambda: self._circles[overlay_id]["Transport"].send_presence(pstatus="ident#" +
+                                                                                 self.node_id))
                     self._circles[overlay_id]["Announce"] = time.time() + \
-                        (int(self.config["PresenceInterval"]) * random.randint(2, 20))
-                #self._circles[overlay_id]["JidCache"].scavenge()
+                                                            (int(self.config["PresenceInterval"]) * random.randint(2,
+                                                                                                                   20))
+                # self._circles[overlay_id]["JidCache"].scavenge()
                 self.scavenge_expired_outgoing_rem_acts(self._circles[overlay_id]
                                                         ["OutgoingRemoteActs"])
             self.scavenge_pending_cbts()
@@ -483,7 +494,7 @@ class Signal(ControllerModule):
             peer_qlen = outgoing_rem_acts[peer_id].qsize()
             if not outgoing_rem_acts[peer_id].queue:
                 continue
-            remact_descr = outgoing_rem_acts[peer_id].queue[0] # peek at the first/oldest entry
+            remact_descr = outgoing_rem_acts[peer_id].queue[0]  # peek at the first/oldest entry
             if time.time() - remact_descr[2] >= self.request_timeout:
                 peer_ids.append(peer_id)
                 self.sig_log("Remote acts scavenged for removal peer id {0} qlength {1}"
